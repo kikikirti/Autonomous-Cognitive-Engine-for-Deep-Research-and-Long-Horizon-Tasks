@@ -28,10 +28,13 @@ Long-horizon research and execution requires:
 ```mermaid
 flowchart LR
   G[Goal]
-  P[Task Decomposer / Planner]
-  Q[Subtask Queue]
-  R[Reasoner (LLM)]
-  T[Tool Executor]
-  F[Reflection Engine]
-  M[Memory (Short + Long)]
+  P[Task_Decomposer_Planner]
+  Q[Subtask_Queue]
+  R[Reasoner_LLM]
+  T[Tool_Executor]
+  F[Reflection_Engine]
+  M[Memory_Short_Long]
+
   G --> P --> Q --> R --> T --> F --> M --> Q
+
+```
