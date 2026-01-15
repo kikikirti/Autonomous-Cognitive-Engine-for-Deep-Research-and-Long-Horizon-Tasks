@@ -40,7 +40,7 @@ class Agent:
         self.tools= tools if tools is not None else tool_executor
 
         if self.queue is None:
-            raise TypeError("Missing required argument: queue/task_queue")
+            self.queue = TaskQueue()
         if self.tools is None:
             raise TypeError("Missing required argument: tools/tool_executor")
     

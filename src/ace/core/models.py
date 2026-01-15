@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+import json
+from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Any
-from datetime import datetime
-import json
+
 
 class AgentStatus(str, Enum):
     IDLE="idle"
@@ -16,7 +16,13 @@ class AgentStatus(str, Enum):
 class Task:
     id: str
     description: str
+    priority: int=5
+    depends_on:list[str]=None
     status: str="pending"
+
+    def __post_init__(self)-> None:
+        if self.depends_on is None:
+            self.depends_on = []
 
 
 @dataclass

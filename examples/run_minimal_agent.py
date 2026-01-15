@@ -1,8 +1,6 @@
-from ace.core import Agent, Memory, Planner, Reasoner, Reflector, TaskQueue, ToolExecutor
-from ace.core.models import Task
+from ace.core import Agent, Memory, Reasoner, Reflector, ToolExecutor
+from ace.core.planner import RuleBasedPlanner
 from ace.core.state_machine import AgentStateMachine
-
-
 from ace.logging_config import configure_logging
 
 
@@ -11,17 +9,20 @@ def main() -> None:
 
     agent = Agent(
         memory=Memory(),
-        planner=Planner(),
+        planner=RuleBasedPlanner(),
         reasoner=Reasoner(),
         reflector=Reflector(),
-        task_queue=TaskQueue(),
         tool_executor=ToolExecutor(),
+        task_queue=None,  # not used directly here
     )
-    sm=AgentStateMachine(agent)
-    task=Task(id="task-001", description="Find papers about agent memory systems")
-    sm.run_once(task)
-    
-    print("Execution finished.")
+
+    goal = "Build a minimal autonomous agent memory system overview"
+    planner = RuleBasedPlanner()
+    tasks = planner.decompose(goal)
+
+    sm = AgentStateMachine(agent)
+    sm.run_goal(goal, tasks)
+
 
 if __name__ == "__main__":
     main()
