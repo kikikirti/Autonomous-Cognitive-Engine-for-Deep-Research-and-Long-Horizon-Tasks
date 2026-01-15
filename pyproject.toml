@@ -1,0 +1,41 @@
+[project]
+name = "ace"
+version = "0.1.0"
+description = "Autonomous Cognitive Engine for Deep Research and Long-Horizon Tasks"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Kirti Gupta" }]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.5",
+]
+
+[project.scripts]
+ace = "ace.cli:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+lint.select = ["E", "F", "I", "B", "UP"]
+lint.ignore = []
+
+[tool.ruff.lint.isort]
+known-first-party = ["ace"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
