@@ -1,13 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
+
+from ace.core.memory_store import SQLiteMemoryStore
+from ace.core.memory_system import EpisodicMemory, MemorySystem, ShortTermMemory
 
 
 @dataclass
 class Memory:
-    short_term: dict[str, Any] = field(default_factory=dict)
-    long_term: list[dict[str, Any]] = field(default_factory=list)
+    system: MemorySystem
 
-    def add_episode(self, event: dict[str, Any]) -> None:
-        self.long_term.append(event)
+    @classmethod
+    def create_default(cls) -> "Memory":
+        stm = ShortTermMemory(max_items=20)
+        stm.load()
+        episodic = EpisodicMemory(episodes_path="audit/episodes.jsonl")
+        ltm = SQLiteMemoryStore(db_path="data/memory.db")
+        return cls(system=MemorySystem(stm=stm, episodic=episodic, ltm=ltm))

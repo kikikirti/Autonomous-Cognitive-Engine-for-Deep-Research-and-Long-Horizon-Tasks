@@ -24,21 +24,27 @@ class AgentStateMachine:
         self.state.current_task = task.id
         self._save_state()
 
+        
+        self.agent.memory.system.add_to_stm("task", task.description, {"task_id": task.id})
+
         try:
-            req=ToolRequest(
+            req = ToolRequest(
                 name="web_search",
-                input={"query":task.description},
+                input={"query": task.description},
                 trace_id=task.id,
             )
-            resp=self.agent.tools.execute(req)
+
+            resp = self.agent.tools.execute(req)
             if not resp.ok:
                 raise RuntimeError(resp.error.message if resp.error else "Tool failed")
-            result_text=str(resp.output)
-            if task.id=="t4":
-                
-                write_req=ToolRequest(
+
+            result_text = str(resp.output)
+
+            
+            if task.id == "t4":
+                write_req = ToolRequest(
                     name="file_writer",
-                    input={"path":"summary.md","content":f"# Final Output\n\n{result_text}\n"},
+                    input={"path": "summary.md", "content": f"# Final Output\n\n{result_text}\n"},
                     trace_id=f"{task.id}-write",
                 )
                 self.agent.tools.execute(write_req)
@@ -51,6 +57,17 @@ class AgentStateMachine:
                 timestamp=datetime.utcnow().isoformat(),
             )
             self._log_episode(episode)
+
+            
+            self.agent.memory.system.add_to_stm("result", result_text, {"task_id": task.id})
+
+            
+            self.agent.memory.system.remember_long_term(
+                record_id=f"episode:{task.id}:{episode.timestamp}",
+                text=f"Task: {task.description}\nOutput: {result_text}",
+                tags=["episode", "tool_run"],
+                metadata={"task_id": task.id, "success": True},
+            )
 
             self.state.completed_tasks += 1
             self.state.status = AgentStatus.COMPLETED
@@ -65,6 +82,18 @@ class AgentStateMachine:
                 timestamp=datetime.utcnow().isoformat(),
             )
             self._log_episode(episode)
+
+            
+            self.agent.memory.system.add_to_stm("error", str(exc), {"task_id": task.id})
+
+            
+            self.agent.memory.system.remember_long_term(
+                record_id=f"error:{task.id}:{episode.timestamp}",
+                text=f"Task: {task.description}\nError: {str(exc)}",
+                tags=["error", "episode"],
+                metadata={"task_id": task.id, "success": False},
+            )
+
             self.state.status = AgentStatus.FAILED
             return False
 
@@ -83,10 +112,16 @@ class AgentStateMachine:
         print(f"Goal received: {goal}")
         print(f"Tasks created: {len(tasks)}")
 
+        
+        self.agent.memory.system.add_to_stm("goal", goal)
+
         while True:
             should, reason = tracker.should_stop(len(queue))
             if should:
                 print(reason)
+
+                
+                self.agent.memory.system.add_to_stm("halt", reason)
                 return reason
 
             tracker.tick_iteration()

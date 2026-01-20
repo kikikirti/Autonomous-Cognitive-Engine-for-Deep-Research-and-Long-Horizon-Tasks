@@ -21,9 +21,9 @@ def main() -> None:
     registry.register(FileWriterTool(base_dir="artifacts"))
 
     tool_executor = ToolExecutor(registry=registry, max_retries=2)
-
+    memory=Memory.create_default()
     agent = Agent(
-        memory=Memory(),
+        memory=memory,
         planner=RuleBasedPlanner(),
         reasoner=Reasoner(),
         reflector=Reflector(),
