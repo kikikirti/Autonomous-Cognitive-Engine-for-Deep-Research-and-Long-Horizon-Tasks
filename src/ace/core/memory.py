@@ -11,7 +11,7 @@ class Memory:
     system: MemorySystem
 
     @classmethod
-    def create_default(cls) -> "Memory":
+    def create_default(cls) -> Memory:
         stm = ShortTermMemory(max_items=20)
         stm.load()
         episodic = EpisodicMemory(episodes_path="audit/episodes.jsonl")

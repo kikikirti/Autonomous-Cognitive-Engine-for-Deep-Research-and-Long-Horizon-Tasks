@@ -64,5 +64,10 @@
     "kind": "halt",
     "content": "Halted: All tasks completed",
     "meta": {}
+  },
+  {
+    "kind": "goal",
+    "content": "demo-goal",
+    "meta": {}
   }
 ]

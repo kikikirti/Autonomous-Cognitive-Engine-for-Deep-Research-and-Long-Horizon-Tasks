@@ -65,7 +65,13 @@ class SQLiteMemoryStore:
                 ),
             )
 
-    def add_text(self, record_id: str, text: str, tags: list[str] | None = None, metadata: dict[str, Any] | None = None) -> None:
+    def add_text(
+            self, 
+            record_id: str, 
+            text: str, 
+            tags: list[str] | None = None, 
+            metadata: dict[str, Any] | None = None
+                 ) -> None:
         rec = MemoryRecord(
             id=record_id,
             text=text,

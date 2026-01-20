@@ -66,7 +66,13 @@ class MemorySystem:
     def add_to_stm(self, kind: str, content: str, meta: dict[str, Any] | None = None) -> None:
         self.stm.add({"kind": kind, "content": content, "meta": meta or {}})
 
-    def remember_long_term(self, record_id: str, text: str, tags: list[str] | None = None, metadata: dict[str, Any] | None = None) -> None:
+    def remember_long_term(
+            self, 
+            record_id: str, 
+            text: str, 
+            tags: list[str] | None = None, 
+            metadata: dict[str, Any] | None = None
+            ) -> None:
         self.ltm.add_text(record_id=record_id, text=text, tags=tags, metadata=metadata)
 
     def recall_long_term(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
