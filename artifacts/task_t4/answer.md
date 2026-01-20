@@ -1,5 +1,3 @@
-# Final Output
-
 Query: Review and refine the draft for: Build a minimal autonomous agent memory system overview
 
 Evidence-based notes:

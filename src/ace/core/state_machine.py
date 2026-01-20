@@ -7,6 +7,9 @@ from pathlib import Path
 from ace.core.agent import Agent
 from ace.core.models import AgentState, AgentStatus, Episode, Task
 from ace.core.queue import TaskQueue
+from ace.core.rag.fusion import RAGFusion
+from ace.core.rag.pipeline import RAGPipeline
+from ace.core.rag.retrievers import InternalRetriever, WebRetriever
 from ace.core.stop import StopConfig, StopTracker
 from ace.core.tool_schemas import ToolRequest
 
@@ -17,7 +20,9 @@ AUDIT_DIR.mkdir(exist_ok=True)
 class AgentStateMachine:
     def __init__(self, agent: Agent):
         self.agent = agent
-        self.state = AgentState(status=AgentStatus.IDLE, current_task=None, completed_tasks=0)
+        self.state = AgentState(status=AgentStatus.IDLE, 
+                                current_task=None, 
+                                completed_tasks=0)
 
     def run_once(self, task: Task) -> bool:
         self.state.status = AgentStatus.RUNNING
@@ -28,27 +33,64 @@ class AgentStateMachine:
         self.agent.memory.system.add_to_stm("task", task.description, {"task_id": task.id})
 
         try:
-            req = ToolRequest(
-                name="web_search",
-                input={"query": task.description},
-                trace_id=task.id,
+            
+            pipeline = RAGPipeline(
+                web_retriever=WebRetriever(self.agent.tools),
+                internal_retriever=InternalRetriever(self.agent.memory.system),
+                fusion=RAGFusion(max_chunks=8),
+            )
+            rag = pipeline.run(query=task.description, limit=5)
+
+            result_text = rag.answer
+
+            
+            for idx, ch in enumerate(rag.fused, start=1):
+                self.agent.memory.system.remember_long_term(
+                    record_id=f"retrieval:{task.id}:{idx}:{ch.citation.timestamp}",
+                    text=ch.text,
+                    tags=["retrieval", "chunk", ch.citation.source],
+                    metadata={
+                        "task_id": task.id,
+                        "source": ch.citation.source,
+                        "source_id": ch.citation.source_id,
+                        "confidence": ch.citation.confidence,
+                        "timestamp": ch.citation.timestamp,
+                    },
+                )
+
+            
+            chunks_jsonl = "\n".join([c.to_json() for c in rag.fused])
+
+            self.agent.tools.execute(
+                ToolRequest(
+                    name="file_writer",
+                    input={"path": f"task_{task.id}/chunks.jsonl", "content": chunks_jsonl},
+                    trace_id=f"{task.id}-chunks",
+                )
             )
 
-            resp = self.agent.tools.execute(req)
-            if not resp.ok:
-                raise RuntimeError(resp.error.message if resp.error else "Tool failed")
-
-            result_text = str(resp.output)
+            self.agent.tools.execute(
+                ToolRequest(
+                    name="file_writer",
+                    input={"path": f"task_{task.id}/answer.md", "content": result_text},
+                    trace_id=f"{task.id}-answer",
+                )
+            )
 
             
             if task.id == "t4":
-                write_req = ToolRequest(
-                    name="file_writer",
-                    input={"path": "summary.md", "content": f"# Final Output\n\n{result_text}\n"},
-                    trace_id=f"{task.id}-write",
+                self.agent.tools.execute(
+                    ToolRequest(
+                        name="file_writer",
+                        input={
+                            "path": "summary.md", 
+                            "content": f"# Final Output\n\n{result_text}\n",
+                            },
+                        trace_id=f"{task.id}-write",
+                    )
                 )
-                self.agent.tools.execute(write_req)
 
+            
             episode = Episode(
                 task_id=task.id,
                 input=task.description,
@@ -65,7 +107,7 @@ class AgentStateMachine:
             self.agent.memory.system.remember_long_term(
                 record_id=f"episode:{task.id}:{episode.timestamp}",
                 text=f"Task: {task.description}\nOutput: {result_text}",
-                tags=["episode", "tool_run"],
+                tags=["episode", "rag_run"],
                 metadata={"task_id": task.id, "success": True},
             )
 
@@ -83,10 +125,8 @@ class AgentStateMachine:
             )
             self._log_episode(episode)
 
-            
             self.agent.memory.system.add_to_stm("error", str(exc), {"task_id": task.id})
 
-            
             self.agent.memory.system.remember_long_term(
                 record_id=f"error:{task.id}:{episode.timestamp}",
                 text=f"Task: {task.description}\nError: {str(exc)}",
@@ -101,7 +141,11 @@ class AgentStateMachine:
             self.state.current_task = None
             self._save_state()
 
-    def run_goal(self, goal: str, tasks: list[Task], stop_cfg: StopConfig | None = None) -> str:
+    def run_goal(self, 
+                 goal: str, 
+                 tasks: list[Task], 
+                 stop_cfg: StopConfig | None = None
+                 ) -> str:
         stop_cfg = stop_cfg or StopConfig()
         tracker = StopTracker(stop_cfg)
 
@@ -119,8 +163,6 @@ class AgentStateMachine:
             should, reason = tracker.should_stop(len(queue))
             if should:
                 print(reason)
-
-                
                 self.agent.memory.system.add_to_stm("halt", reason)
                 return reason
 
