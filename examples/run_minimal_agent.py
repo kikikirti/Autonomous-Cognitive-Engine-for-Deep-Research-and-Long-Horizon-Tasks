@@ -1,7 +1,7 @@
 from ace.core.agent import Agent
 from ace.core.memory import Memory
 from ace.core.planner import RuleBasedPlanner
-from ace.core.reasoner import Reasoner
+from ace.core.reasoning.rule_reasoner import RuleBasedReasoner
 from ace.core.reflector import Reflector
 from ace.core.state_machine import AgentStateMachine
 from ace.core.tools.file_writer import FileWriterTool
@@ -21,11 +21,11 @@ def main() -> None:
     registry.register(FileWriterTool(base_dir="artifacts"))
 
     tool_executor = ToolExecutor(registry=registry, max_retries=2)
-    memory=Memory.create_default()
+    
     agent = Agent(
-        memory=memory,
+        memory=Memory.create_default(),
         planner=RuleBasedPlanner(),
-        reasoner=Reasoner(),
+        reasoner=RuleBasedReasoner(),
         reflector=Reflector(),
         tool_executor=tool_executor,  
     )

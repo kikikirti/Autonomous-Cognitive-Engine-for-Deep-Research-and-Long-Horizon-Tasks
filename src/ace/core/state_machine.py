@@ -20,75 +20,120 @@ AUDIT_DIR.mkdir(exist_ok=True)
 class AgentStateMachine:
     def __init__(self, agent: Agent):
         self.agent = agent
-        self.state = AgentState(status=AgentStatus.IDLE, 
-                                current_task=None, 
-                                completed_tasks=0)
+        self.state = AgentState(
+            status=AgentStatus.IDLE,
+            current_task=None,
+            completed_tasks=0,
+        )
 
     def run_once(self, task: Task) -> bool:
         self.state.status = AgentStatus.RUNNING
         self.state.current_task = task.id
         self._save_state()
 
-        
         self.agent.memory.system.add_to_stm("task", task.description, {"task_id": task.id})
 
         try:
             
-            pipeline = RAGPipeline(
-                web_retriever=WebRetriever(self.agent.tools),
-                internal_retriever=InternalRetriever(self.agent.memory.system),
-                fusion=RAGFusion(max_chunks=8),
-            )
-            rag = pipeline.run(query=task.description, limit=5)
-
-            result_text = rag.answer
+            plan = self.agent.reasoner.plan(task.description)
 
             
-            for idx, ch in enumerate(rag.fused, start=1):
-                self.agent.memory.system.remember_long_term(
-                    record_id=f"retrieval:{task.id}:{idx}:{ch.citation.timestamp}",
-                    text=ch.text,
-                    tags=["retrieval", "chunk", ch.citation.source],
-                    metadata={
-                        "task_id": task.id,
-                        "source": ch.citation.source,
-                        "source_id": ch.citation.source_id,
-                        "confidence": ch.citation.confidence,
-                        "timestamp": ch.citation.timestamp,
-                    },
-                )
-
-            
-            chunks_jsonl = "\n".join([c.to_json() for c in rag.fused])
-
-            self.agent.tools.execute(
-                ToolRequest(
-                    name="file_writer",
-                    input={"path": f"task_{task.id}/chunks.jsonl", "content": chunks_jsonl},
-                    trace_id=f"{task.id}-chunks",
-                )
+            self.agent.memory.system.add_to_stm(
+                "plan",
+                str(plan),
+                {"task_id": task.id},
             )
 
-            self.agent.tools.execute(
-                ToolRequest(
-                    name="file_writer",
-                    input={"path": f"task_{task.id}/answer.md", "content": result_text},
-                    trace_id=f"{task.id}-answer",
-                )
-            )
+            if getattr(plan, "requires_approval", False):
+                raise RuntimeError("Approval required by safety policy for this action.")
+
+            if plan.action == "STOP":
+                raise RuntimeError(plan.stop_reason or "Stopped by reasoner policy.")
+
+            if plan.action == "ASK_HUMAN":
+                raise RuntimeError(plan.ask or "Human input required by reasoner policy.")
 
             
-            if task.id == "t4":
+            result_text: str
+
+            if plan.action == "TOOL_CALL" and plan.tool_call is not None:
+                
+                req = ToolRequest(
+                    name=plan.tool_call.name,
+                    input=plan.tool_call.input,
+                    trace_id=f"{task.id}-policy",
+                )
+                resp = self.agent.tools.execute(req)
+                if not resp.ok:
+                    msg = "Tool failed"
+                    if resp.error is not None:
+                        msg = resp.error.message
+                    raise RuntimeError(msg)
+
+                result_text = str(resp.output)
+
+            else:
+                
+                pipeline = RAGPipeline(
+                    web_retriever=WebRetriever(self.agent.tools),
+                    internal_retriever=InternalRetriever(self.agent.memory.system),
+                    fusion=RAGFusion(max_chunks=8),
+                )
+                rag = pipeline.run(query=task.description, limit=5)
+                result_text = rag.answer
+
+                
+                for idx, ch in enumerate(rag.fused, start=1):
+                    self.agent.memory.system.remember_long_term(
+                        record_id=f"retrieval:{task.id}:{idx}:{ch.citation.timestamp}",
+                        text=ch.text,
+                        tags=["retrieval", "chunk", ch.citation.source],
+                        metadata={
+                            "task_id": task.id,
+                            "source": ch.citation.source,
+                            "source_id": ch.citation.source_id,
+                            "confidence": ch.citation.confidence,
+                            "timestamp": ch.citation.timestamp,
+                        },
+                    )
+
+                
+                chunks_jsonl = "\n".join([c.to_json() for c in rag.fused])
+
                 self.agent.tools.execute(
                     ToolRequest(
                         name="file_writer",
                         input={
-                            "path": "summary.md", 
-                            "content": f"# Final Output\n\n{result_text}\n",
-                            },
-                        trace_id=f"{task.id}-write",
+                            "path": f"task_{task.id}/chunks.jsonl",
+                            "content": chunks_jsonl,
+                        },
+                        trace_id=f"{task.id}-chunks",
                     )
                 )
+
+                self.agent.tools.execute(
+                    ToolRequest(
+                        name="file_writer",
+                        input={
+                            "path": f"task_{task.id}/answer.md",
+                            "content": result_text,
+                        },
+                        trace_id=f"{task.id}-answer",
+                    )
+                )
+
+                
+                if task.id == "t4":
+                    self.agent.tools.execute(
+                        ToolRequest(
+                            name="file_writer",
+                            input={
+                                "path": "summary.md",
+                                "content": f"# Final Output\n\n{result_text}\n",
+                            },
+                            trace_id=f"{task.id}-write",
+                        )
+                    )
 
             
             episode = Episode(
@@ -100,14 +145,12 @@ class AgentStateMachine:
             )
             self._log_episode(episode)
 
-            
             self.agent.memory.system.add_to_stm("result", result_text, {"task_id": task.id})
 
-            
             self.agent.memory.system.remember_long_term(
                 record_id=f"episode:{task.id}:{episode.timestamp}",
                 text=f"Task: {task.description}\nOutput: {result_text}",
-                tags=["episode", "rag_run"],
+                tags=["episode", "policy_run"],
                 metadata={"task_id": task.id, "success": True},
             )
 
@@ -115,7 +158,7 @@ class AgentStateMachine:
             self.state.status = AgentStatus.COMPLETED
             return True
 
-        except Exception as exc:  
+        except Exception as exc:
             episode = Episode(
                 task_id=task.id,
                 input=task.description,
@@ -141,11 +184,12 @@ class AgentStateMachine:
             self.state.current_task = None
             self._save_state()
 
-    def run_goal(self, 
-                 goal: str, 
-                 tasks: list[Task], 
-                 stop_cfg: StopConfig | None = None
-                 ) -> str:
+    def run_goal(
+        self,
+        goal: str,
+        tasks: list[Task],
+        stop_cfg: StopConfig | None = None,
+    ) -> str:
         stop_cfg = stop_cfg or StopConfig()
         tracker = StopTracker(stop_cfg)
 
@@ -156,7 +200,6 @@ class AgentStateMachine:
         print(f"Goal received: {goal}")
         print(f"Tasks created: {len(tasks)}")
 
-        
         self.agent.memory.system.add_to_stm("goal", goal)
 
         while True:
