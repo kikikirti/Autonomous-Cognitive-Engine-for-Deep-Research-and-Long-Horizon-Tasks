@@ -6,6 +6,8 @@ from pathlib import Path
 
 from ace.core.agent import Agent
 from ace.core.models import AgentState, AgentStatus, Episode, Task
+from ace.core.quality.monitor import MonitorConfig, QualityMonitor
+from ace.core.quality.reflector import RuleBasedReflector
 from ace.core.queue import TaskQueue
 from ace.core.rag.fusion import RAGFusion
 from ace.core.rag.pipeline import RAGPipeline
@@ -25,6 +27,8 @@ class AgentStateMachine:
             current_task=None,
             completed_tasks=0,
         )
+        self.reflector_engine = RuleBasedReflector()
+        self.monitor = QualityMonitor(MonitorConfig())
 
     def run_once(self, task: Task) -> bool:
         self.state.status = AgentStatus.RUNNING
@@ -34,10 +38,8 @@ class AgentStateMachine:
         self.agent.memory.system.add_to_stm("task", task.description, {"task_id": task.id})
 
         try:
-            
             plan = self.agent.reasoner.plan(task.description)
 
-            
             self.agent.memory.system.add_to_stm(
                 "plan",
                 str(plan),
@@ -53,89 +55,122 @@ class AgentStateMachine:
             if plan.action == "ASK_HUMAN":
                 raise RuntimeError(plan.ask or "Human input required by reasoner policy.")
 
-            
-            result_text: str
+            redos = 0
+            query = task.description
+            result_text: str = ""
 
-            if plan.action == "TOOL_CALL" and plan.tool_call is not None:
-                
-                req = ToolRequest(
-                    name=plan.tool_call.name,
-                    input=plan.tool_call.input,
-                    trace_id=f"{task.id}-policy",
-                )
-                resp = self.agent.tools.execute(req)
-                if not resp.ok:
-                    msg = "Tool failed"
-                    if resp.error is not None:
-                        msg = resp.error.message
-                    raise RuntimeError(msg)
+            while True:
+                repeated = self.monitor.observe_query(query)
 
-                result_text = str(resp.output)
-
-            else:
-                
-                pipeline = RAGPipeline(
-                    web_retriever=WebRetriever(self.agent.tools),
-                    internal_retriever=InternalRetriever(self.agent.memory.system),
-                    fusion=RAGFusion(max_chunks=8),
-                )
-                rag = pipeline.run(query=task.description, limit=5)
-                result_text = rag.answer
-
-                
-                for idx, ch in enumerate(rag.fused, start=1):
-                    self.agent.memory.system.remember_long_term(
-                        record_id=f"retrieval:{task.id}:{idx}:{ch.citation.timestamp}",
-                        text=ch.text,
-                        tags=["retrieval", "chunk", ch.citation.source],
-                        metadata={
-                            "task_id": task.id,
-                            "source": ch.citation.source,
-                            "source_id": ch.citation.source_id,
-                            "confidence": ch.citation.confidence,
-                            "timestamp": ch.citation.timestamp,
-                        },
+                if plan.action == "TOOL_CALL" and plan.tool_call is not None:
+                    req = ToolRequest(
+                        name=plan.tool_call.name,
+                        input=plan.tool_call.input,
+                        trace_id=f"{task.id}-policy",
                     )
+                    resp = self.agent.tools.execute(req)
+                    if not resp.ok:
+                        msg = "Tool failed"
+                        if resp.error is not None:
+                            msg = resp.error.message
+                        raise RuntimeError(msg)
 
-                
-                chunks_jsonl = "\n".join([c.to_json() for c in rag.fused])
+                    result_text = str(resp.output)
 
-                self.agent.tools.execute(
-                    ToolRequest(
-                        name="file_writer",
-                        input={
-                            "path": f"task_{task.id}/chunks.jsonl",
-                            "content": chunks_jsonl,
-                        },
-                        trace_id=f"{task.id}-chunks",
+                else:
+                    pipeline = RAGPipeline(
+                        web_retriever=WebRetriever(self.agent.tools),
+                        internal_retriever=InternalRetriever(self.agent.memory.system),
+                        fusion=RAGFusion(max_chunks=8),
                     )
-                )
+                    rag = pipeline.run(query=query, limit=5)
+                    result_text = rag.answer
 
-                self.agent.tools.execute(
-                    ToolRequest(
-                        name="file_writer",
-                        input={
-                            "path": f"task_{task.id}/answer.md",
-                            "content": result_text,
-                        },
-                        trace_id=f"{task.id}-answer",
-                    )
-                )
+                    for idx, ch in enumerate(rag.fused, start=1):
+                        self.agent.memory.system.remember_long_term(
+                            record_id=f"retrieval:{task.id}:{idx}:{ch.citation.timestamp}",
+                            text=ch.text,
+                            tags=["retrieval", "chunk", ch.citation.source],
+                            metadata={
+                                "task_id": task.id,
+                                "source": ch.citation.source,
+                                "source_id": ch.citation.source_id,
+                                "confidence": ch.citation.confidence,
+                                "timestamp": ch.citation.timestamp,
+                            },
+                        )
 
-                
-                if task.id == "t4":
+                    chunks_jsonl = "\n".join([c.to_json() for c in rag.fused])
+
                     self.agent.tools.execute(
                         ToolRequest(
                             name="file_writer",
                             input={
-                                "path": "summary.md",
-                                "content": f"# Final Output\n\n{result_text}\n",
+                                "path": f"task_{task.id}/chunks.jsonl",
+                                "content": chunks_jsonl,
                             },
-                            trace_id=f"{task.id}-write",
+                            trace_id=f"{task.id}-chunks",
                         )
                     )
 
-            
+                    self.agent.tools.execute(
+                        ToolRequest(
+                            name="file_writer",
+                            input={
+                                "path": f"task_{task.id}/answer.md",
+                                "content": result_text,
+                            },
+                            trace_id=f"{task.id}-answer",
+                        )
+                    )
+
+                    if task.id == "t4":
+                        self.agent.tools.execute(
+                            ToolRequest(
+                                name="file_writer",
+                                input={
+                                    "path": "summary.md",
+                                    "content": f"# Final Output\n\n{result_text}\n",
+                                },
+                                trace_id=f"{task.id}-write",
+                            )
+                        )
+
+                reflection = self.reflector_engine.reflect(task.description, result_text)
+
+                self.agent.memory.system.add_to_stm(
+                    "reflection",
+                    json.dumps(reflection.to_dict(), ensure_ascii=False),
+                    {"task_id": task.id},
+                )
+
+                self.agent.memory.system.remember_long_term(
+                    record_id=f"reflection:{task.id}:{datetime.utcnow().isoformat()}",
+                    text=json.dumps(reflection.to_dict(), ensure_ascii=False),
+                    tags=["reflection", "quality"],
+                    metadata={"task_id": task.id, "score": reflection.score},
+                )
+
+                low_streak = self.monitor.observe_score(reflection.score)
+
+                if repeated or low_streak or reflection.escalate_to_human:
+                    raise RuntimeError(
+                        "Escalate to human: repeated queries or low-quality streak detected."
+                    )
+
+                if reflection.redo and redos < self.monitor.cfg.max_redos_per_task:
+                    redos += 1
+                    query = reflection.suggested_query or f"{query} best practices"
+
+                    self.agent.memory.system.add_to_stm(
+                        "redo",
+                        f"Redo #{redos} with query: {query}",
+                        {"task_id": task.id},
+                    )
+                    continue
+
+                break
+
             episode = Episode(
                 task_id=task.id,
                 input=task.description,
@@ -222,7 +257,15 @@ class AgentStateMachine:
                 tracker.mark_progress()
                 print(f"Tasks executed: {task.id}")
             else:
-                tracker.mark_no_progress()
+                # ✅ Milestone 7 loop breaker: don't stall the whole run on one failure.
+                completed.add(task.id)
+                tracker.mark_progress()
+                print(f"Task failed (skipped): {task.id}")
+                self.agent.memory.system.add_to_stm(
+                    "skip",
+                    f"Skipped failed task: {task.id}",
+                    {"task_id": task.id},
+                )
 
     def _save_state(self) -> None:
         with open(AUDIT_DIR / "state.json", "w", encoding="utf-8") as f:

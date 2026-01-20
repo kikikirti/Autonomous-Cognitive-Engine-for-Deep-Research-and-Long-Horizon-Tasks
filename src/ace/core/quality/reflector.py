@@ -1,15 +1,9 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 
 from ace.core.quality.models import ReflectionResult
 
-
-@dataclass
-class Reflector:
-    def score(self,text:str) -> float:
-        return 1.0
 
 class ReflectorInterface:
     def reflect(self, task_text: str, result_text: str) -> ReflectionResult:
@@ -17,6 +11,8 @@ class ReflectorInterface:
 
 
 class RuleBasedReflector(ReflectorInterface):
+    
+
     def reflect(self, task_text: str, result_text: str) -> ReflectionResult:
         issues: list[str] = []
         improvements: list[str] = []
@@ -29,7 +25,7 @@ class RuleBasedReflector(ReflectorInterface):
             improvements.append("Add more evidence and a structured synthesis.")
 
         if "Stubbed web_search" in txt or "example.com/stub" in txt:
-            score -= 0.10
+            score -= 0.30
             issues.append("Evidence looks like stub/demo data.")
             improvements.append("Broaden query or use internal memory for richer context.")
 
@@ -44,10 +40,12 @@ class RuleBasedReflector(ReflectorInterface):
 
         suggested_query = None
         if redo:
+            
             suggested_query = f"{task_text} overview examples best practices"
 
-        escalate = score < 0.25
+        escalate = score < 0.40
 
+        
         score = max(0.0, min(1.0, score))
 
         return ReflectionResult(
