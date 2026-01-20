@@ -8,6 +8,7 @@ from ace.core.agent import Agent
 from ace.core.models import AgentState, AgentStatus, Episode, Task
 from ace.core.queue import TaskQueue
 from ace.core.stop import StopConfig, StopTracker
+from ace.core.tool_schemas import ToolRequest
 
 AUDIT_DIR = Path("audit")
 AUDIT_DIR.mkdir(exist_ok=True)
@@ -24,11 +25,28 @@ class AgentStateMachine:
         self._save_state()
 
         try:
-            result = self.agent.tools.execute(task.description)
+            req=ToolRequest(
+                name="web_search",
+                input={"query":task.description},
+                trace_id=task.id,
+            )
+            resp=self.agent.tools.execute(req)
+            if not resp.ok:
+                raise RuntimeError(resp.error.message if resp.error else "Tool failed")
+            result_text=str(resp.output)
+            if task.id=="t4":
+                
+                write_req=ToolRequest(
+                    name="file_writer",
+                    input={"path":"summary.md","content":f"# Final Output\n\n{result_text}\n"},
+                    trace_id=f"{task.id}-write",
+                )
+                self.agent.tools.execute(write_req)
+
             episode = Episode(
                 task_id=task.id,
                 input=task.description,
-                output=result,
+                output=result_text,
                 success=True,
                 timestamp=datetime.utcnow().isoformat(),
             )
